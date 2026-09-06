@@ -1,0 +1,18 @@
+services:
+  broker:
+    image: eclipse-mosquitto:2
+    ports:
+      - "127.0.0.1:18884:1883"
+    command:
+      - sh
+      - -c
+      - 'printf "listener 1883\nallow_anonymous true\npersistence false\n" > /tmp/test.conf; exec mosquitto -c /tmp/test.conf'
+  bridge:
+    build: ..
+    environment:
+      MQTT_HOST: broker
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true

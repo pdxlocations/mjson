@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mjson"
+version = "0.1.0"
+description = "Meshtastic MQTT protobuf to JSON bridge"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "GPL-3.0-only"
+dependencies = [
+  "meshtastic>=2.6,<3",
+  "paho-mqtt>=2.1,<3",
+  "cryptography>=43,<47",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8,<10"]
+
+[project.scripts]
+mjson = "mjson.bridge:main"
+
+[tool.setuptools.packages.find]
+include = ["mjson*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
