@@ -1,4 +1,4 @@
-import json
+from collections import OrderedDict
 import logging
 import os
 import signal
@@ -9,6 +9,7 @@ from dataclasses import dataclass
 import paho.mqtt.client as mqtt
 
 from .decoder import PacketError, decode_envelope, parse_key
+from .legacy import dumps
 
 LOG = logging.getLogger("mjson")
 
@@ -55,6 +56,7 @@ class Config:
     ca_file: str | None
     client_id: str
     qos: int
+    channel_index: int = 0
 
     @classmethod
     def from_env(cls):
@@ -71,11 +73,14 @@ class Config:
             ca_file=os.getenv("MQTT_CA_FILE") or None,
             client_id=os.getenv("MQTT_CLIENT_ID", ""),
             qos=int(os.getenv("MQTT_QOS", "1")),
+            channel_index=int(os.getenv("MQTT_CHANNEL_INDEX", "0")),
         )
         if not config.host or not 1 <= config.port <= 65535:
             raise ValueError("MQTT_HOST and MQTT_PORT must identify a broker")
         if config.qos not in (0, 1, 2):
             raise ValueError("MQTT_QOS must be 0, 1, or 2")
+        if not 0 <= config.channel_index <= 7:
+            raise ValueError("MQTT_CHANNEL_INDEX must be between 0 and 7")
         validate_topic(config.input_topic, subscription=True)
         if config.output_topic != "auto":
             validate_topic(config.output_topic)
@@ -89,6 +94,7 @@ class Config:
 class Bridge:
     def __init__(self, config: Config):
         self.config = config
+        self.node_names = OrderedDict()
         self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=config.client_id)
         self.client.on_connect = self.on_connect
         self.client.on_disconnect = self.on_disconnect
@@ -129,13 +135,19 @@ class Bridge:
             if output_topic is None:
                 return
         try:
-            document = decode_envelope(message.payload, self.config.key)
+            document = decode_envelope(message.payload, self.config.key,
+                                       channel_index=self.config.channel_index, node_names=self.node_names)
         except PacketError as exc:
             LOG.debug("Skipping packet on %s: %s", message.topic, exc)
             return
+        if document["type"] == "nodeinfo":
+            self.node_names[document["from"]] = document["payload"]["longname"]
+            self.node_names.move_to_end(document["from"])
+            if len(self.node_names) > 4096:
+                self.node_names.popitem(last=False)
         result = client.publish(
             output_topic,
-            json.dumps(document, ensure_ascii=True, separators=(",", ":")),
+            dumps(document),
             qos=self.config.qos,
             retain=False,
         )

@@ -3,10 +3,10 @@
 import base64
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-from google.protobuf.json_format import MessageToDict
 from google.protobuf.message import DecodeError
-from meshtastic import protocols
 from meshtastic.protobuf import mesh_pb2, mqtt_pb2, portnums_pb2
+
+from .legacy import application_payload
 
 DEFAULT_KEY = "1PG7OiApB1nwvP+rz05pAQ=="
 
@@ -34,11 +34,7 @@ def decrypt_packet(packet: mesh_pb2.MeshPacket, key: bytes) -> mesh_pb2.Data:
     return mesh_pb2.Data.FromString(plaintext)
 
 
-def as_dict(message) -> dict:
-    return MessageToDict(message, preserving_proto_field_name=True)
-
-
-def decode_envelope(payload: bytes, key: bytes) -> dict:
+def decode_envelope(payload: bytes, key: bytes, *, channel_index: int = 0, node_names=None) -> dict:
     try:
         envelope = mqtt_pb2.ServiceEnvelope.FromString(payload)
         if not envelope.HasField("packet"):
@@ -48,41 +44,31 @@ def decode_envelope(payload: bytes, key: bytes) -> dict:
             raise PacketError("PKI encrypted packet cannot use a channel key")
         if packet.WhichOneof("payload_variant") == "encrypted":
             packet.decoded.CopyFrom(decrypt_packet(packet, key))
+            # Firmware serializes its decoded packet, whose channel is a local index.
+            packet.channel = channel_index
         elif not packet.HasField("decoded"):
             raise PacketError("missing packet payload")
-        data = packet.decoded
-        if data.portnum == portnums_pb2.UNKNOWN_APP:
+        if packet.decoded.portnum == portnums_pb2.UNKNOWN_APP:
             raise PacketError("missing application port (possibly wrong key)")
-
-        handler = protocols.get(data.portnum)
-        kind = handler.name if handler else "unknown"
-        if data.portnum in (
-            portnums_pb2.TEXT_MESSAGE_APP,
-            portnums_pb2.RANGE_TEST_APP,
-            portnums_pb2.DETECTION_SENSOR_APP,
-        ):
-            application = {"text": data.payload.decode("utf-8")}
-        elif handler and handler.protobufFactory:
-            message = handler.protobufFactory()
-            message.ParseFromString(data.payload)
-            application = as_dict(message)
-            if data.portnum == portnums_pb2.POSITION_APP:
-                if "latitude_i" in application:
-                    application["latitude"] = message.latitude_i / 1e7
-                if "longitude_i" in application:
-                    application["longitude"] = message.longitude_i / 1e7
-        else:
-            application = {"raw": base64.b64encode(data.payload).decode("ascii")}
-
-        return {
+        kind, application, has_payload = application_payload(packet, node_names or {})
+        document = {
             "id": packet.id,
             "from": getattr(packet, "from"),
             "to": packet.to,
             "sender": envelope.gateway_id,
             "channel": packet.channel,
             "type": kind,
-            "payload": application,
             "timestamp": packet.rx_time,
         }
+        if has_payload:
+            document["payload"] = application
+        if packet.rx_rssi:
+            document["rssi"] = packet.rx_rssi
+        if packet.rx_snr:
+            document["snr"] = packet.rx_snr
+        if packet.hop_start and packet.hop_limit <= packet.hop_start:
+            document["hop_start"] = packet.hop_start
+            document["hops_away"] = packet.hop_start - packet.hop_limit
+        return document
     except (DecodeError, UnicodeDecodeError) as exc:
         raise PacketError("invalid protobuf/text or incorrect channel key") from exc

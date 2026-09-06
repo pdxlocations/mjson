@@ -7,6 +7,7 @@ import pytest
 
 from mjson.bridge import Bridge, Config
 from test_decoder import TOPIC, envelope
+from meshtastic.protobuf import mesh_pb2, portnums_pb2
 
 
 @pytest.fixture(autouse=True)
@@ -24,6 +25,8 @@ def clean_environment(monkeypatch):
     ("MQTT_OUTPUT_TOPIC", ""),
     ("MQTT_PORT", "0"),
     ("MQTT_QOS", "3"),
+    ("MQTT_CHANNEL_INDEX", "8"),
+    ("MQTT_CHANNEL_INDEX", "-1"),
     ("MQTT_TLS", "maybe"),
     ("MQTT_CA_FILE", "/tmp/ca.pem"),
 ])
@@ -59,6 +62,23 @@ def test_resubscribe_after_reconnect():
     for _ in range(2):
         bridge.on_connect(client, None, None, reason, None)
     assert client.subscribe.call_count == 2
+
+
+def test_channel_config_and_observed_traceroute_names(monkeypatch):
+    monkeypatch.setenv("MQTT_CHANNEL_INDEX", "3")
+    bridge = Bridge(Config.from_env())
+    client = Mock()
+    client.publish.return_value.rc = mqtt.MQTT_ERR_SUCCESS
+    user = mesh_pb2.User(long_name="Known node")
+    se = envelope(portnums_pb2.NODEINFO_APP, user.SerializeToString(), encrypted=True)
+    bridge.on_message(client, None, SimpleNamespace(topic=TOPIC, payload=se.SerializeToString()))
+    document = json.loads(client.publish.call_args.args[1])
+    assert document["channel"] == 3
+    se = envelope(portnums_pb2.TRACEROUTE_APP, mesh_pb2.RouteDiscovery().SerializeToString())
+    se.packet.decoded.request_id = 10
+    bridge.on_message(client, None, SimpleNamespace(topic=TOPIC, payload=se.SerializeToString()))
+    document = json.loads(client.publish.call_args.args[1])
+    assert document["payload"]["route"] == ["Unknown", "Known node"]
 
 
 @pytest.mark.parametrize("root,encoding", [

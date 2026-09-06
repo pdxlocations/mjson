@@ -6,7 +6,7 @@ application payloads, and publishes JSON to a topic on the same broker.
 
 Decryption and protobuf dispatch are adapted from
 [Ben Lipsey's mmqtt](https://github.com/pdxlocations/mmqtt). This project uses
-the Meshtastic Python package for generated protobufs and application handlers;
+the Meshtastic Python package for generated protobufs;
 it does not require a checkout of mmqtt. Licensed GPL-3.0-only; see LICENSE.
 
 ## Run in Docker
@@ -54,6 +54,7 @@ All settings are environment variables. Compose reads `.env` (ignored by Git).
 | `MQTT_USERNAME`, `MQTT_PASSWORD` | empty | Optional credentials |
 | `MQTT_INPUT_TOPIC` | `msh/US/2/e/#` | One MQTT subscription filter |
 | `MQTT_OUTPUT_TOPIC` | `msh/US/2/json` | One literal destination topic, or `auto` for Meshtastic JSON topic routing |
+| `MQTT_CHANNEL_INDEX` | `0` | Legacy local channel index (0–7) for encrypted uplinks |
 | `MESHTASTIC_KEY` | `AQ==` | Default key shortcut or base64 16/32-byte AES key |
 | `MQTT_TLS` | `false` | Enable TLS with hostname/certificate verification |
 | `MQTT_CA_FILE` | empty | Optional CA file path; mount it into the container |
@@ -68,36 +69,64 @@ seconds and re-subscribe after connecting. SIGTERM/SIGINT stops the bridge.
 
 ## JSON format
 
-One document is published per successfully decoded incoming envelope:
+Output follows the non-nRF52/ESP32 JSON serializer from
+[Meshtastic firmware v2.7.15.567b8ea](https://github.com/meshtastic/firmware/blob/v2.7.15.567b8ea/src/serialization/MeshPacketSerializer.cpp).
+This replaces the previous protobuf-shaped payloads. For example:
 
 ```json
 {
-  "id": 123,
-  "from": 305419896,
+  "channel": 0,
+  "from": 1819523280,
+  "hop_start": 2,
+  "hops_away": 0,
+  "id": 1474103697,
+  "payload": {
+    "air_util_tx": 0.104055553674698,
+    "battery_level": 100,
+    "channel_utilization": 0,
+    "uptime_seconds": 0,
+    "voltage": 4.10599994659424
+  },
+  "rssi": -116,
+  "sender": "!433b8cd8",
+  "snr": -12.75,
+  "timestamp": 1788669041,
   "to": 4294967295,
-  "sender": "!aabbccdd",
-  "channel": 8,
-  "type": "text",
-  "payload": {"text": "Hello mesh"},
-  "timestamp": 1780000000
+  "type": "telemetry"
 }
 ```
 
-`sender` is the MQTT gateway; `from` is the original mesh sender. `timestamp`
-is the packet's `rx_time` (zero when absent). `channel` is the wire value
-(channel hash for encrypted packets), not necessarily a radio channel index.
-Output contains only `id`, `from`, `to`, `sender`, `channel`, `type`,
-`payload`, and `timestamp`; no bridge metadata or duplicate packet wrapper.
+Firmware compatibility includes:
 
-`type` follows Meshtastic's protocol handler names: `text`, `user` (node info),
-`position`, `telemetry`, `routing`, `traceroute`, etc. Position payloads include
-decimal `latitude`/`longitude` when the integer coordinates are present.
-Telemetry retains its nested metrics objects. Unknown application ports use
-`type: "unknown"` and `payload: {"raw": "<base64>"}`.
+- Flat telemetry with firmware field names, presence checks, and defaults.
+  Telemetry's own `time` and metric variant wrappers are not emitted.
+- `nodeinfo` with `id`, `longname`, `shortname`, numeric `hardware`, and `role`.
+- Integer position coordinates and firmware's conditional position fields.
+- Waypoint, neighbor info, traceroute replies, detection, paxcounter, and GPIO
+  payloads. Unsupported ports and traceroute requests have an empty `type`
+  and no `payload`, matching the serializer.
+- Valid JSON text messages become the payload directly; ordinary text uses
+  `{"text":"..."}`. Detection messages always use the text wrapper.
+- Nonzero `rssi` and `snr`; `hop_start` and `hops_away` when the hop values are valid.
+- Sorted keys, compact output, 15-significant-digit numbers, and nonfinite
+  numbers serialized as `null`. No mjson metadata or duplicate packet wrapper.
 
-The top-level fields follow Meshtastic MQTT JSON. Application payloads use
-Meshtastic Python protocol handlers and protobuf field names, so they are not
-an exact replica of the firmware JSON format.
+`sender` comes from the envelope's gateway ID; `from` is the mesh sender.
+`timestamp` comes from `rx_time`, including zero when absent.
+
+The firmware's normal MQTT JSON path serialized the decoded packet, whose
+`channel` was the gateway's **local index**, not its encrypted channel hash.
+Decoded envelopes preserve their channel value. Encrypted envelopes use
+`MQTT_CHANNEL_INDEX` (default `0`), since the gateway's index cannot be recovered
+from the channel hash. For example, LongFast's default-key hash `8` typically
+corresponds to index `0`. Set the index to match your gateway; one value cannot
+reproduce differing channel layouts across all gateways in a broad subscription.
+
+Traceroute names use up to 4096 recently observed node-info entries in memory,
+with `"Unknown"` for missing entries. A gateway may have a different node database,
+so its route names cannot be guaranteed identical. Invalid/undecodable packets
+remain skipped rather than reproducing firmware error output. These source-data
+limits prevent a blanket byte-for-byte guarantee for every gateway and packet.
 
 Packets using PKI/direct-message encryption, invalid protobufs, and undecodable
 payloads are skipped. One channel key is tried; use separate subscriptions and

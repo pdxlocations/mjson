@@ -11,6 +11,7 @@ import time
 
 import paho.mqtt.client as mqtt
 import pytest
+from meshtastic.protobuf import portnums_pb2, telemetry_pb2
 
 from test_decoder import TOPIC, envelope
 
@@ -46,6 +47,28 @@ def test_docker_round_trip():
             if document["payload"] == {"text": "Still alive"}:
                 break
             assert time.monotonic() < deadline
+        telemetry = telemetry_pb2.Telemetry(time=1780078454)
+        telemetry.device_metrics.battery_level = 100
+        telemetry.device_metrics.voltage = 4.106
+        se = envelope(portnums_pb2.TELEMETRY_APP, telemetry.SerializeToString(), encrypted=True)
+        se.packet.channel = 8
+        se.packet.rx_rssi = -116
+        se.packet.rx_snr = -12.75
+        se.packet.hop_start = se.packet.hop_limit = 2
+        client.publish(TOPIC, se.SerializeToString(), qos=1).wait_for_publish(5)
+        deadline = time.monotonic() + 10
+        while True:
+            document = received.get(timeout=max(0.1, deadline - time.monotonic()))
+            if document["type"] == "telemetry":
+                break
+            assert time.monotonic() < deadline
+        assert document["channel"] == 0
+        assert document["payload"] == {
+            "battery_level": 100, "voltage": 4.10599994659424,
+            "air_util_tx": 0, "channel_utilization": 0, "uptime_seconds": 0,
+        }
+        assert document["rssi"] == -116 and document["snr"] == -12.75
+        assert document["hop_start"] == 2 and document["hops_away"] == 0
     finally:
         client.disconnect()
         client.loop_stop()

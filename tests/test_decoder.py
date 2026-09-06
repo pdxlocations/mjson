@@ -1,5 +1,3 @@
-import base64
-
 import pytest
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from meshtastic.protobuf import mesh_pb2, mqtt_pb2, portnums_pb2, telemetry_pb2
@@ -42,28 +40,47 @@ def test_text(encrypted):
 def test_position():
     position = mesh_pb2.Position(latitude_i=454313900, longitude_i=-1223735400)
     result = decode_envelope(envelope(portnums_pb2.POSITION_APP, position.SerializeToString()).SerializeToString(), KEY)
-    assert result["payload"]["latitude"] == 45.43139
-    assert result["payload"]["longitude"] == -122.37354
+    assert result["payload"] == {"latitude_i": 454313900, "longitude_i": -1223735400}
 
 
-def test_telemetry():
-    telemetry = telemetry_pb2.Telemetry()
-    telemetry.device_metrics.battery_level = 99
-    result = decode_envelope(envelope(portnums_pb2.TELEMETRY_APP, telemetry.SerializeToString(), True).SerializeToString(), KEY)
-    assert result["payload"]["device_metrics"]["battery_level"] == 99
+@pytest.mark.parametrize("encrypted", [False, True])
+def test_telemetry(encrypted):
+    telemetry = telemetry_pb2.Telemetry(time=1780078454)
+    telemetry.device_metrics.battery_level = 100
+    telemetry.device_metrics.voltage = 4.10599994659424
+    telemetry.device_metrics.air_util_tx = 0.104055553674698
+    se = envelope(portnums_pb2.TELEMETRY_APP, telemetry.SerializeToString(), encrypted)
+    se.packet.channel = 8 if encrypted else 0
+    result = decode_envelope(se.SerializeToString(), KEY)
+    assert result == {
+        "id": 123,
+        "from": 0x12345678,
+        "to": 0xFFFFFFFF,
+        "sender": "!aabbccdd",
+        "channel": 0,
+        "type": "telemetry",
+        "payload": {
+            "battery_level": 100,
+            "voltage": telemetry.device_metrics.voltage,
+            "air_util_tx": telemetry.device_metrics.air_util_tx,
+            "channel_utilization": 0,
+            "uptime_seconds": 0,
+        },
+        "timestamp": 1780000000,
+    }
 
 
 def test_nodeinfo():
     user = mesh_pb2.User(id="!12345678", long_name="Test node")
     result = decode_envelope(envelope(portnums_pb2.NODEINFO_APP, user.SerializeToString()).SerializeToString(), KEY)
-    assert result["type"] == "user"
-    assert result["payload"]["long_name"] == "Test node"
+    assert result["type"] == "nodeinfo"
+    assert result["payload"] == {"id": "!12345678", "longname": "Test node", "shortname": "", "hardware": 0, "role": 0}
 
 
-def test_unknown_preserves_binary():
+def test_unknown_matches_firmware_empty_type():
     result = decode_envelope(envelope(500, b"\x00\xff").SerializeToString(), KEY)
-    assert result["type"] == "unknown"
-    assert result["payload"]["raw"] == base64.b64encode(b"\x00\xff").decode()
+    assert result["type"] == ""
+    assert "payload" not in result
 
 
 @pytest.mark.parametrize("payload", [b"", b"not protobuf", b'{"json":true}', mqtt_pb2.ServiceEnvelope(channel_id="test").SerializeToString()])
