@@ -4,10 +4,20 @@ A Docker-ready MQTT bridge that subscribes to Meshtastic `ServiceEnvelope`
 protobufs, decrypts channel traffic using the default `AQ==` key, decodes
 application payloads, and publishes JSON to a topic on the same broker.
 
-Decryption and protobuf dispatch are adapted from
-[Ben Lipsey's mmqtt](https://github.com/pdxlocations/mmqtt). This project uses
-the Meshtastic Python package for generated protobufs;
-it does not require a checkout of mmqtt. Licensed GPL-3.0-only; see LICENSE.
+## Meshtastic 2.8 JSON compatibility
+
+Meshtastic 2.8 removed firmware MQTT JSON publishing. mjson is a stopgap that
+subscribes to the MQTT protobuf uplink and republishes the legacy JSON format
+under the usual `/2/json/` topic path. It is intended to keep existing Home
+Assistant MQTT sensors and automations working while they are migrated to
+protobuf-aware integrations or another long-term interface.
+
+The JSON mapping follows the pre-2.8 firmware serializer, so legacy templates
+such as `value_json.payload.text` and telemetry automations can continue to use
+their existing fields. It is a compatibility bridge, not an official firmware
+replacement.
+
+Licensed GPL-3.0-only; see LICENSE.
 
 ## Run in Docker
 
