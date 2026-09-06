@@ -59,3 +59,30 @@ def test_resubscribe_after_reconnect():
     for _ in range(2):
         bridge.on_connect(client, None, None, reason, None)
     assert client.subscribe.call_count == 2
+
+
+@pytest.mark.parametrize("root,encoding", [
+    ("msh", "e"),
+    ("msh/US", "e"),
+    ("msh/EU_868/local", "c"),
+])
+def test_auto_routing_and_feedback(monkeypatch, root, encoding):
+    monkeypatch.setenv("MQTT_INPUT_TOPIC", "msh/#")
+    monkeypatch.setenv("MQTT_OUTPUT_TOPIC", "auto")
+    bridge = Bridge(Config.from_env())
+    client = Mock()
+    client.publish.return_value.rc = mqtt.MQTT_ERR_SUCCESS
+    source = f"{root}/2/{encoding}/LongFast/!aabbccdd"
+    destination = f"{root}/2/json/LongFast/!aabbccdd"
+    payload = envelope(encrypted=True).SerializeToString()
+    bridge.on_message(client, None, SimpleNamespace(topic=source, payload=payload))
+    args, _ = client.publish.call_args
+    assert args[0] == destination
+    assert json.loads(args[1])["payload"] == {"text": "Hello mesh"}
+    client.publish.reset_mock()
+    # Even valid protobuf on a JSON topic must not be processed again.
+    for topic, data in [(destination, args[1].encode()), (destination, payload),
+                        (f"{root}/2/map/!aabbccdd", payload),
+                        (f"{root}/2/e/LongFast/", payload)]:
+        bridge.on_message(client, None, SimpleNamespace(topic=topic, payload=data))
+    client.publish.assert_not_called()

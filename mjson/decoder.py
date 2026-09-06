@@ -38,7 +38,7 @@ def as_dict(message) -> dict:
     return MessageToDict(message, preserving_proto_field_name=True)
 
 
-def decode_envelope(payload: bytes, key: bytes, source_topic: str) -> dict:
+def decode_envelope(payload: bytes, key: bytes) -> dict:
     try:
         envelope = mqtt_pb2.ServiceEnvelope.FromString(payload)
         if not envelope.HasField("packet"):
@@ -46,8 +46,7 @@ def decode_envelope(payload: bytes, key: bytes, source_topic: str) -> dict:
         packet = envelope.packet
         if packet.pki_encrypted:
             raise PacketError("PKI encrypted packet cannot use a channel key")
-        encrypted = packet.WhichOneof("payload_variant") == "encrypted"
-        if encrypted:
+        if packet.WhichOneof("payload_variant") == "encrypted":
             packet.decoded.CopyFrom(decrypt_packet(packet, key))
         elif not packet.HasField("decoded"):
             raise PacketError("missing packet payload")
@@ -76,19 +75,14 @@ def decode_envelope(payload: bytes, key: bytes, source_topic: str) -> dict:
             application = {"raw": base64.b64encode(data.payload).decode("ascii")}
 
         return {
-            "schema_version": 1,
             "id": packet.id,
             "from": getattr(packet, "from"),
             "to": packet.to,
             "sender": envelope.gateway_id,
             "channel": packet.channel,
-            "channel_id": envelope.channel_id,
             "type": kind,
             "payload": application,
             "timestamp": packet.rx_time,
-            "encrypted": encrypted,
-            "source_topic": source_topic,
-            "packet": as_dict(packet),
         }
     except (DecodeError, UnicodeDecodeError) as exc:
         raise PacketError("invalid protobuf/text or incorrect channel key") from exc

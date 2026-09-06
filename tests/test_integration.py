@@ -37,7 +37,7 @@ def test_docker_round_trip():
             except queue.Empty:
                 assert time.monotonic() < deadline, "No JSON from bridge"
         assert document["payload"] == {"text": "Hello mesh"}
-        assert document["encrypted"] is True
+        assert set(document) == {"id", "from", "to", "sender", "channel", "type", "payload", "timestamp"}
         client.publish(TOPIC, b"invalid protobuf", qos=1).wait_for_publish(5)
         client.publish(TOPIC, envelope(payload=b"Still alive").SerializeToString(), qos=1).wait_for_publish(5)
         deadline = time.monotonic() + 10
@@ -46,7 +46,6 @@ def test_docker_round_trip():
             if document["payload"] == {"text": "Still alive"}:
                 break
             assert time.monotonic() < deadline
-        assert document["encrypted"] is False
     finally:
         client.disconnect()
         client.loop_stop()

@@ -26,18 +26,22 @@ def envelope(port=portnums_pb2.TEXT_MESSAGE_APP, payload=b"Hello mesh", encrypte
 
 @pytest.mark.parametrize("encrypted", [False, True])
 def test_text(encrypted):
-    result = decode_envelope(envelope(encrypted=encrypted).SerializeToString(), KEY, TOPIC)
-    assert result["payload"] == {"text": "Hello mesh"}
-    assert result["from"] == 0x12345678
-    assert result["sender"] == "!aabbccdd"
-    assert result["encrypted"] == encrypted
-    assert result["packet"]["decoded"]["payload"] == "SGVsbG8gbWVzaA=="
-    assert "encrypted" not in result["packet"]
+    result = decode_envelope(envelope(encrypted=encrypted).SerializeToString(), KEY)
+    assert result == {
+        "id": 123,
+        "from": 0x12345678,
+        "to": 0xFFFFFFFF,
+        "sender": "!aabbccdd",
+        "channel": 0,
+        "type": "text",
+        "payload": {"text": "Hello mesh"},
+        "timestamp": 1780000000,
+    }
 
 
 def test_position():
     position = mesh_pb2.Position(latitude_i=454313900, longitude_i=-1223735400)
-    result = decode_envelope(envelope(portnums_pb2.POSITION_APP, position.SerializeToString()).SerializeToString(), KEY, TOPIC)
+    result = decode_envelope(envelope(portnums_pb2.POSITION_APP, position.SerializeToString()).SerializeToString(), KEY)
     assert result["payload"]["latitude"] == 45.43139
     assert result["payload"]["longitude"] == -122.37354
 
@@ -45,19 +49,19 @@ def test_position():
 def test_telemetry():
     telemetry = telemetry_pb2.Telemetry()
     telemetry.device_metrics.battery_level = 99
-    result = decode_envelope(envelope(portnums_pb2.TELEMETRY_APP, telemetry.SerializeToString(), True).SerializeToString(), KEY, TOPIC)
+    result = decode_envelope(envelope(portnums_pb2.TELEMETRY_APP, telemetry.SerializeToString(), True).SerializeToString(), KEY)
     assert result["payload"]["device_metrics"]["battery_level"] == 99
 
 
 def test_nodeinfo():
     user = mesh_pb2.User(id="!12345678", long_name="Test node")
-    result = decode_envelope(envelope(portnums_pb2.NODEINFO_APP, user.SerializeToString()).SerializeToString(), KEY, TOPIC)
+    result = decode_envelope(envelope(portnums_pb2.NODEINFO_APP, user.SerializeToString()).SerializeToString(), KEY)
     assert result["type"] == "user"
     assert result["payload"]["long_name"] == "Test node"
 
 
 def test_unknown_preserves_binary():
-    result = decode_envelope(envelope(500, b"\x00\xff").SerializeToString(), KEY, TOPIC)
+    result = decode_envelope(envelope(500, b"\x00\xff").SerializeToString(), KEY)
     assert result["type"] == "unknown"
     assert result["payload"]["raw"] == base64.b64encode(b"\x00\xff").decode()
 
@@ -65,25 +69,25 @@ def test_unknown_preserves_binary():
 @pytest.mark.parametrize("payload", [b"", b"not protobuf", b'{"json":true}', mqtt_pb2.ServiceEnvelope(channel_id="test").SerializeToString()])
 def test_invalid_envelope(payload):
     with pytest.raises(PacketError):
-        decode_envelope(payload, KEY, TOPIC)
+        decode_envelope(payload, KEY)
 
 
 def test_wrong_key():
     with pytest.raises(PacketError):
-        decode_envelope(envelope(encrypted=True).SerializeToString(), bytes(16), TOPIC)
+        decode_envelope(envelope(encrypted=True).SerializeToString(), bytes(16))
 
 
 def test_pki():
     se = envelope(encrypted=True)
     se.packet.pki_encrypted = True
     with pytest.raises(PacketError, match="PKI"):
-        decode_envelope(se.SerializeToString(), KEY, TOPIC)
+        decode_envelope(se.SerializeToString(), KEY)
 
 
 @pytest.mark.parametrize("port,payload", [(0, b"text"), (portnums_pb2.TEXT_MESSAGE_APP, b"\xff"), (portnums_pb2.POSITION_APP, b"\xff")])
 def test_invalid_application(port, payload):
     with pytest.raises(PacketError):
-        decode_envelope(envelope(port, payload).SerializeToString(), KEY, TOPIC)
+        decode_envelope(envelope(port, payload).SerializeToString(), KEY)
 
 
 @pytest.mark.parametrize("value", ["", "not base64", "AA==", "é"])

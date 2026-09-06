@@ -25,6 +25,21 @@ Both encrypted and already-decoded envelopes are accepted. The defaults read
 Set the input to e.g. `msh/US/2/e/LongFast/#` to limit it to one channel.
 Topic roots vary by network; use the actual paths on your broker.
 
+To receive everything under `msh/` and publish using the
+[Meshtastic JSON topic structure](https://meshtastic.org/docs/software/integrations/mqtt/#json-topic), set:
+
+```dotenv
+MQTT_INPUT_TOPIC=msh/#
+MQTT_OUTPUT_TOPIC=auto
+```
+
+Auto maps `<root>/2/e/<channel>/<gateway>` (or legacy `/2/c/`) to
+`<root>/2/json/<channel>/<gateway>`, preserving region and any nested root.
+For example, `msh/US/2/e/LongFast/!abcd1234` becomes
+`msh/US/2/json/LongFast/!abcd1234`. Only protobuf topic paths are processed;
+incoming JSON and other topics are ignored to prevent feedback loops.
+This changes topic routing only; the JSON schema below still applies.
+
 Use `host.docker.internal` for a broker on the Docker Desktop host;
 `localhost` inside the container refers to the container itself.
 
@@ -38,7 +53,7 @@ All settings are environment variables. Compose reads `.env` (ignored by Git).
 | `MQTT_PORT` | `1883`, or `8883` with TLS | Broker port |
 | `MQTT_USERNAME`, `MQTT_PASSWORD` | empty | Optional credentials |
 | `MQTT_INPUT_TOPIC` | `msh/US/2/e/#` | One MQTT subscription filter |
-| `MQTT_OUTPUT_TOPIC` | `msh/US/2/json` | One literal destination topic |
+| `MQTT_OUTPUT_TOPIC` | `msh/US/2/json` | One literal destination topic, or `auto` for Meshtastic JSON topic routing |
 | `MESHTASTIC_KEY` | `AQ==` | Default key shortcut or base64 16/32-byte AES key |
 | `MQTT_TLS` | `false` | Enable TLS with hostname/certificate verification |
 | `MQTT_CA_FILE` | empty | Optional CA file path; mount it into the container |
@@ -46,7 +61,8 @@ All settings are environment variables. Compose reads `.env` (ignored by Git).
 | `MQTT_CLIENT_ID` | generated | Set unique IDs when running multiple instances |
 | `LOG_LEVEL` | `INFO` | Use `DEBUG` for packet skips and publish details |
 
-Output is never retained. Input and output must not overlap; invalid
+Output is never retained. Literal output must not match the input filter; auto
+routing safely permits overlap by accepting only protobuf topic paths. Invalid
 configuration exits immediately. Reconnects use exponential backoff up to 60
 seconds and re-subscribe after connecting. SIGTERM/SIGINT stops the bridge.
 
@@ -56,36 +72,22 @@ One document is published per successfully decoded incoming envelope:
 
 ```json
 {
-  "schema_version": 1,
   "id": 123,
   "from": 305419896,
   "to": 4294967295,
   "sender": "!aabbccdd",
   "channel": 8,
-  "channel_id": "LongFast",
   "type": "text",
   "payload": {"text": "Hello mesh"},
-  "timestamp": 1780000000,
-  "encrypted": true,
-  "source_topic": "msh/US/2/e/LongFast/!aabbccdd",
-  "packet": {
-    "from": 305419896,
-    "to": 4294967295,
-    "channel": 8,
-    "id": 123,
-    "rx_time": 1780000000,
-    "decoded": {"portnum": "TEXT_MESSAGE_APP", "payload": "SGVsbG8gbWVzaA=="}
-  }
+  "timestamp": 1780000000
 }
 ```
 
 `sender` is the MQTT gateway; `from` is the original mesh sender. `timestamp`
 is the packet's `rx_time` (zero when absent). `channel` is the wire value
 (channel hash for encrypted packets), not necessarily a radio channel index.
-`encrypted` describes the incoming packet. `packet` preserves the decoded
-MeshPacket metadata and raw application payload using protobuf JSON rules:
-snake_case field names, enum names, base64 bytes, string 64-bit integers, and
-omitted default scalar fields.
+Output contains only `id`, `from`, `to`, `sender`, `channel`, `type`,
+`payload`, and `timestamp`; no bridge metadata or duplicate packet wrapper.
 
 `type` follows Meshtastic's protocol handler names: `text`, `user` (node info),
 `position`, `telemetry`, `routing`, `traceroute`, etc. Position payloads include
@@ -93,8 +95,9 @@ decimal `latitude`/`longitude` when the integer coordinates are present.
 Telemetry retains its nested metrics objects. Unknown application ports use
 `type: "unknown"` and `payload: {"raw": "<base64>"}`.
 
-This is mjson's versioned schema, not an exact replica of the retired firmware
-JSON format. Consumers needing the old format should adapt to the fields above.
+The top-level fields follow Meshtastic MQTT JSON. Application payloads use
+Meshtastic Python protocol handlers and protobuf field names, so they are not
+an exact replica of the firmware JSON format.
 
 Packets using PKI/direct-message encryption, invalid protobufs, and undecodable
 payloads are skipped. One channel key is tried; use separate subscriptions and

@@ -31,6 +31,17 @@ def validate_topic(topic: str, *, subscription: bool = False) -> None:
             raise ValueError("Invalid # wildcard in MQTT topic")
 
 
+def meshtastic_json_topic(source_topic: str) -> str | None:
+    """Map v2 protobuf topics to JSON, preserving root, channel and gateway."""
+    parts = source_topic.rsplit("/", 4)
+    if len(parts) != 5:
+        return None
+    root, version, encoding, channel, gateway = parts
+    if not root or version != "2" or encoding not in {"e", "c"} or not channel or not gateway:
+        return None
+    return f"{root}/2/json/{channel}/{gateway}"
+
+
 @dataclass(frozen=True)
 class Config:
     host: str
@@ -66,9 +77,10 @@ class Config:
         if config.qos not in (0, 1, 2):
             raise ValueError("MQTT_QOS must be 0, 1, or 2")
         validate_topic(config.input_topic, subscription=True)
-        validate_topic(config.output_topic)
-        if mqtt.topic_matches_sub(config.input_topic, config.output_topic):
-            raise ValueError("MQTT_OUTPUT_TOPIC must not match MQTT_INPUT_TOPIC (feedback loop)")
+        if config.output_topic != "auto":
+            validate_topic(config.output_topic)
+            if mqtt.topic_matches_sub(config.input_topic, config.output_topic):
+                raise ValueError("MQTT_OUTPUT_TOPIC must not match MQTT_INPUT_TOPIC (feedback loop)")
         if config.ca_file and not config.tls:
             raise ValueError("MQTT_CA_FILE requires MQTT_TLS=true")
         return config
@@ -111,13 +123,18 @@ class Bridge:
             LOG.warning("Disconnected: %s; reconnecting automatically", reason_code)
 
     def on_message(self, client, userdata, message):
+        output_topic = self.config.output_topic
+        if output_topic == "auto":
+            output_topic = meshtastic_json_topic(message.topic)
+            if output_topic is None:
+                return
         try:
-            document = decode_envelope(message.payload, self.config.key, message.topic)
+            document = decode_envelope(message.payload, self.config.key)
         except PacketError as exc:
             LOG.debug("Skipping packet on %s: %s", message.topic, exc)
             return
         result = client.publish(
-            self.config.output_topic,
+            output_topic,
             json.dumps(document, ensure_ascii=True, separators=(",", ":")),
             qos=self.config.qos,
             retain=False,
