@@ -1,4 +1,5 @@
 # mjson
+<img width="400" alt="image" src="https://github.com/user-attachments/assets/38832663-3281-48eb-886d-d883a0b05ef8" />
 
 A Docker-ready MQTT bridge that subscribes to Meshtastic `ServiceEnvelope`
 protobufs, decrypts channel traffic using the default `AQ==` key, decodes
